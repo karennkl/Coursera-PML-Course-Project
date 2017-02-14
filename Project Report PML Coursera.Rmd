@@ -1,0 +1,142 @@
+---
+title: "PML Project Report"
+output: html_document
+---
+
+## Introduction
+
+Accelerometers data on the belt, forearm, arm, and dumbell of 6 participant is used. The participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways. The five ways are according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Only Class A corresponds to correct performance. 
+The **goal** of this project is to predict the manner in which they did the exercise (variable *classe*), i.e., Class A to E. 
+
+* More information is available from the website here: [link]http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+* The training data consists of accelerometer data and a label identifying the quality of the activity the participant was doing. It is available here: [link] https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+* The testing data consists of accelerometer data without the identifying label.It is available here: [link] https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+## Data Preprocessing and Feature Selection
+
+The appropriate libraries, training data and testing data are loaded.
+```{r load_libraries, message=FALSE, warning=FALSE, echo=TRUE}
+library(caret);library(randomForest); library(rpart); library(parallel); library(doParallel)
+```
+```{r,echo=TRUE, results='markup'}
+ptrain <- read.csv("pml-training.csv", na.strings = c("NA", "", "DIV/0!"))
+ptest <- read.csv("pml-testing.csv", na.strings = c("NA","", "DIV/0!"))
+```
+Columns which contains missing values (NAs) are removed. 
+```{r,echo=TRUE, results='markup'}
+ptrain <- ptrain[,colSums(is.na(ptrain)) == 0]
+ptest <- ptest[,colSums(is.na(ptest)) == 0]
+```
+The first 7 columns that do not project predicting influence over the outcome *classe* are removed subsequently. The deleted variables are  
+
+* *unlabeled row index, user_name* which logically, are not predictors  
+* *raw_timestamp_part_1, raw_timestamp_part_,2 cvtd_timestamp* which contains time stamps.  
+* *new_window, num_window* which are not related to sensor data.
+
+```{r,echo=TRUE, results='markup'}
+ptrain <- ptrain[,-c(1:7)]
+ptest <- ptest[, -c(1:7)]
+```
+
+Any variables with near zero variance are removed.
+```{r,echo=TRUE, results='markup'}
+nzv <- nearZeroVar(ptrain, saveMetrics = TRUE)
+ptrain <- ptrain[,nzv$nzv == FALSE]
+```
+
+```{r,echo=TRUE, results='hide'}
+dim(ptrain)
+dim(ptest)
+```
+The processed ptrain has `r nrow(ptrain)` rows and `r ncol(ptrain)` columns. The processed ptest has `r nrow(ptest)` rows and `r ncol(ptest)` columns. 
+
+## Cross Validation Data
+
+Random Forest is chosen for this study as it
+*  improves predictive performance over a single tree by reducing variance 
+*  deals with lots of highly correlated features 
+*  provides free cross-validation 
+
+Its out-of-bag error estimate defines the estimation errors in the internal generated validation sets. However, as project evaluation calls for cross evaluation, the training data is partitioned into two;  training set (60%) and validation set (40%).
+
+```{r,echo=TRUE, results='markup'}
+set.seed(123)
+inTrain <- createDataPartition(y=ptrain$classe, p=0.6, list=FALSE)
+subtrain <- ptrain[inTrain, ]
+subvalid <- ptrain[-inTrain, ]
+```
+
+Training data has `r nrow(subtrain)` rows and `r ncol(subtrain)` columns. Cross validation data has `r nrow(subvalid)` rows and `r ncol(subvalid)` columns. 
+
+## Predictive Model Building
+
+The subtrain data is used to create the prediction model. As recommended in the course, parellel processing is used. 
+
+```{r,echo=TRUE, message=FALSE, warning=FALSE, results='markup'}
+model <- "fitRF.RData"
+if (!file.exists(model)) {
+    require(parallel)
+    require(doParallel)
+    cl <- makeCluster(detectCores() - 1)
+    registerDoParallel(cl)
+    fit <- train(classe ~ ., method = "rf", data = subtrain)
+    save(fit, file = "fitRF.RData")
+        stopCluster(cl)
+} else {
+    # Good model exists from a previous run, use it.  
+    load(file = "fitRF.RData", verbose = TRUE)
+}
+```
+## Predictive Model Evaluation - Accuracy and Sample Error 
+
+The accuracy of the prediction (via the subtrain data) is measured.
+```{r,echo=TRUE, results='markup'}
+predRF <- predict(fit, subtrain)
+confusionMatrix (predRF, subtrain$classe)
+```
+
+The subvalid data is used to create a prediction and its accuracy is measured.
+```{r,echo=TRUE, results='markup', options (digit = 4)}
+predvalidRF <- predict(fit, subvalid)
+confusionMatrix (predvalidRF,subvalid$classe)
+```
+
+Given the high level of accuracy for both subtrain (*0.9974*) and subvalid datasets (*0.9968*), there is no need to build another prediction model. The list of important predictors in the model are listed.
+
+## Variable Importance
+
+```{r,echo=TRUE, results='markup'}
+varImp(fit)
+fit$finalModel
+```
+
+The list of variable importance shown above illustrates how the level of  accuracy begins to taper starting with the *roll_forearm* variable. The reported OOB Estimated Error is less than 1%
+
+## Application of Predictive Model on Test Set
+
+The earlier model is applied to the testing dataset and predictions for the class of weightlifting type are made. 
+
+```{r,echo=TRUE, results='markup'}
+predtest <- predict(fit, ptest)
+prediction <- data.frame(
+        problem_id = ptest$problem_id,
+        results=predtest
+)
+print(prediction)
+```
+The submission file is generated.
+
+```{r,echo=TRUE, results='markup'}
+predtest <- as.character(predtest)
+resultfile <- function(x) {
+        n <- length(x)
+        for (i in 1:n) {
+                filename <- paste0("problem_id_",i,".txt")
+                write.table(x[i], file=filename, quote = F, row.names=F, col.names = F)}
+}
+resultfile(predtest)
+```
+
+## Conclusion
+
+With the data available, I am able to fit a reasonably sound Random Forest model with a high degree of accuracy in predicting out of sample observations. It would be recommended to train and test the model with more / complete sample observations.
